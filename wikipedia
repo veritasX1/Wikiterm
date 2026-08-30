@@ -13,26 +13,28 @@ from datetime import datetime
 
 
 # ============================================================
-# WIKIPEDIA DOWNLOADER
+# WIKITERM
+#
+# Wikipedia-Downloader für das Terminal
 #
 # Verwendung:
 #
-#   wikipedia download bremen
+#   wikipedia download Bremen
 #   wikipedia download Berlin
-#   wikipedia download Windows 3.11
+#   wikipedia download "Windows 3.11"
 #
-# Dateien:
-#
-#   ~/Dokumente/Wikipedia/
+# Die Artikel werden als reine TXT-Dateien gespeichert.
 # ============================================================
 
 
 API_URL = "https://de.wikipedia.org/w/api.php"
 
 USER_AGENT = (
-    "WikipediaTextDownloader/1.0 "
-    "(personal terminal tool; local use)"
+    "Wikiterm/1.0 "
+    "(personal terminal Wikipedia text downloader)"
 )
+
+TEXT_WIDTH = 78
 
 
 # ============================================================
@@ -80,6 +82,11 @@ def clean_text(text):
         "\u201d": '"',
         "\u201e": '"',
         "\u201f": '"',
+
+        "\u2026": "...",
+
+        "\u00ab": '"',
+        "\u00bb": '"',
     }
 
     for old, new in replacements.items():
@@ -91,20 +98,24 @@ def clean_text(text):
         if c in "\n\t" or ord(c) >= 32
     )
 
-    # Tabs in Leerzeichen umwandeln
+    # Tabs
     text = text.replace("\t", " ")
 
-    # Mehrfache Leerzeichen reduzieren
-    text = re.sub(r" {2,}", " ", text)
+    # Mehrfache Leerzeichen
+    text = re.sub(
+        r" {2,}",
+        " ",
+        text
+    )
 
     return text
 
 
 # ============================================================
-# TEXT AUF 78 ZEICHEN UMBRECHEN
+# FLIESSTEXT AUF 78 ZEICHEN UMBRECHEN
 # ============================================================
 
-def wrap_text(text, width=78):
+def wrap_text(text, width=TEXT_WIDTH):
 
     result = []
 
@@ -116,12 +127,20 @@ def wrap_text(text, width=78):
             result.append("")
             continue
 
+        # Tabellen und Rahmen niemals umbrechen
+        if (
+            line.startswith("+")
+            or line.startswith("|")
+        ):
+            result.append(line)
+            continue
+
         # Überschriften nicht umbrechen
         if line.startswith("="):
             result.append(line)
             continue
 
-        # Listenpunkte
+        # Listen
         if line.startswith("- "):
 
             wrapped = textwrap.wrap(
@@ -147,6 +166,274 @@ def wrap_text(text, width=78):
 
 
 # ============================================================
+# ASCII-TABELLEN
+# ============================================================
+
+def render_table(rows, caption=None, width=TEXT_WIDTH):
+
+    if not rows:
+        return []
+
+    # Leere Zeilen entfernen
+    rows = [
+        row for row in rows
+        if row.get("cells")
+    ]
+
+    if not rows:
+        return []
+
+    # Maximale Anzahl Spalten
+    column_count = max(
+        len(row["cells"])
+        for row in rows
+    )
+
+    if column_count == 0:
+        return []
+
+    # Fehlende Zellen auffüllen
+    for row in rows:
+
+        while len(row["cells"]) < column_count:
+            row["cells"].append("")
+
+    # Jede Zelle säubern
+    for row in rows:
+
+        row["cells"] = [
+            clean_text(cell).strip()
+            for cell in row["cells"]
+        ]
+
+    # --------------------------------------------------------
+    # Verfügbare Breite berechnen
+    #
+    # Format:
+    #
+    # | Inhalt | Inhalt |
+    #
+    # benötigt:
+    # 3 Zeichen pro Trennstelle + 1 für die äußeren Grenzen
+    # --------------------------------------------------------
+
+    available = (
+        width
+        - (
+            column_count * 3
+            + 1
+        )
+    )
+
+    # Mindestbreite pro Spalte
+    minimum = 8
+
+    if available < column_count * minimum:
+
+        minimum = max(
+            3,
+            available // column_count
+        )
+
+    # --------------------------------------------------------
+    # Natürliche Spaltenbreiten bestimmen
+    # --------------------------------------------------------
+
+    natural_widths = [
+        0
+        for _ in range(column_count)
+    ]
+
+    for row in rows:
+
+        for index, cell in enumerate(
+            row["cells"]
+        ):
+
+            longest = max(
+                (
+                    len(part)
+                    for part in cell.splitlines()
+                ),
+                default=0
+            )
+
+            natural_widths[index] = max(
+                natural_widths[index],
+                longest
+            )
+
+    # Maximal sinnvolle Breite pro Spalte
+    max_column_width = 32
+
+    column_widths = [
+        max(
+            minimum,
+            min(
+                natural,
+                max_column_width
+            )
+        )
+        for natural in natural_widths
+    ]
+
+    # --------------------------------------------------------
+    # Breiten reduzieren, falls Tabelle zu breit wird
+    # --------------------------------------------------------
+
+    total = sum(column_widths)
+
+    while total > available:
+
+        largest = max(
+            range(column_count),
+            key=lambda i: column_widths[i]
+        )
+
+        if column_widths[largest] <= minimum:
+            break
+
+        column_widths[largest] -= 1
+        total -= 1
+
+    # --------------------------------------------------------
+    # Tabellenrahmen
+    # --------------------------------------------------------
+
+    separator = (
+        "+"
+        + "+".join(
+            "-" * (column_widths[i] + 2)
+            for i in range(column_count)
+        )
+        + "+"
+    )
+
+    output = []
+
+    if caption:
+
+        caption = clean_text(
+            caption
+        ).strip()
+
+        if caption:
+
+            output.append(
+                ""
+            )
+
+            caption_lines = textwrap.wrap(
+                caption,
+                width=width,
+                break_long_words=True,
+                break_on_hyphens=False
+            )
+
+            output.extend(
+                caption_lines
+            )
+
+    output.append(
+        separator
+    )
+
+    # --------------------------------------------------------
+    # Tabellenzeilen erzeugen
+    # --------------------------------------------------------
+
+    for row_index, row in enumerate(rows):
+
+        wrapped_cells = []
+
+        for index, cell in enumerate(
+            row["cells"]
+        ):
+
+            cell = cell.strip()
+
+            if not cell:
+                cell = ""
+
+            wrapped = textwrap.wrap(
+                cell,
+                width=column_widths[index],
+                break_long_words=True,
+                break_on_hyphens=False
+            )
+
+            if not wrapped:
+                wrapped = [""]
+
+            wrapped_cells.append(
+                wrapped
+            )
+
+        row_height = max(
+            len(cell)
+            for cell in wrapped_cells
+        )
+
+        for line_index in range(row_height):
+
+            parts = []
+
+            for column_index in range(
+                column_count
+            ):
+
+                cell_lines = wrapped_cells[
+                    column_index
+                ]
+
+                if line_index < len(
+                    cell_lines
+                ):
+
+                    value = cell_lines[
+                        line_index
+                    ]
+
+                else:
+
+                    value = ""
+
+                value = value.ljust(
+                    column_widths[
+                        column_index
+                    ]
+                )
+
+                parts.append(
+                    value
+                )
+
+            output.append(
+                "| "
+                + " | ".join(parts)
+                + " |"
+            )
+
+        # Trennlinie nach Tabellenkopf
+        if row.get("header"):
+
+            output.append(
+                separator
+            )
+
+    # Untere Begrenzung
+    if not output or output[-1] != separator:
+
+        output.append(
+            separator
+        )
+
+    output.append("")
+
+    return output
+
+
+# ============================================================
 # HTML -> TEXT
 # ============================================================
 
@@ -161,14 +448,25 @@ class WikipediaParser(HTMLParser):
         self.lines = []
         self.current = ""
 
-        # Alle gefundenen internen Wikipedia-Links
+        # Wikipedia-Links
         self.links = []
 
-        # Aktuell geöffneter Link
+        # Aktueller Link
         self.current_link = None
 
-        # Bereich, der ignoriert wird
+        # Ignorierter HTML-Bereich
         self.skip_depth = 0
+
+        # ----------------------------------------------------
+        # Tabellen
+        # ----------------------------------------------------
+
+        self.table_depth = 0
+        self.table_rows = []
+        self.table_current_row = None
+        self.table_current_cell = None
+        self.table_current_cell_is_header = False
+        self.table_caption = None
 
         self.block_tags = {
             "p",
@@ -183,7 +481,6 @@ class WikipediaParser(HTMLParser):
             "li",
             "dd",
             "dt",
-            "tr",
             "blockquote",
             "pre"
         }
@@ -196,15 +493,131 @@ class WikipediaParser(HTMLParser):
             "math"
         }
 
-    # --------------------------------------------------------
+    # ========================================================
     # STARTTAG
-    # --------------------------------------------------------
+    # ========================================================
 
-    def handle_starttag(self, tag, attrs):
+    def handle_starttag(
+        self,
+        tag,
+        attrs
+    ):
 
         attrs = dict(attrs)
 
-        # Bereits in einem zu ignorierenden Bereich
+        # ----------------------------------------------------
+        # Tabelle
+        # ----------------------------------------------------
+
+        if tag == "table" and not self.skip_depth:
+
+            if self.table_depth == 0:
+
+                self.finish_line()
+
+                self.table_rows = []
+                self.table_caption = None
+                self.table_current_row = None
+                self.table_current_cell = None
+
+            self.table_depth += 1
+
+            return
+
+        # ----------------------------------------------------
+        # Verschachtelte Tabelle
+        # ----------------------------------------------------
+
+        if self.table_depth > 1:
+
+            if tag == "table":
+
+                self.table_depth += 1
+
+            return
+
+        # ----------------------------------------------------
+        # Innerhalb einer Tabelle
+        # ----------------------------------------------------
+
+        if self.table_depth == 1:
+
+            if tag == "tr":
+
+                self.finish_table_row()
+
+                self.table_current_row = []
+                self.table_current_cell = None
+                self.table_current_cell_is_header = False
+
+                return
+
+            if tag in {"td", "th"}:
+
+                self.finish_table_cell()
+
+                self.table_current_cell = ""
+                self.table_current_cell_is_header = (
+                    tag == "th"
+                )
+
+                return
+
+            if tag == "caption":
+
+                self.finish_table_cell()
+
+                self.table_current_cell = ""
+                self.table_current_cell_is_header = False
+
+                return
+
+            if tag == "br":
+
+                if self.table_current_cell is not None:
+
+                    self.table_current_cell += "\n"
+
+                return
+
+            # Links innerhalb einer Tabelle
+            if tag == "a":
+
+                href = attrs.get(
+                    "href",
+                    ""
+                )
+
+                if href.startswith("/wiki/"):
+
+                    title = href[
+                        len("/wiki/"):
+                    ]
+
+                    title = urllib.parse.unquote(
+                        title
+                    )
+
+                    title = title.replace(
+                        "_",
+                        " "
+                    )
+
+                    if ":" not in title:
+
+                        self.current_link = {
+                            "title": clean_text(title),
+                            "text": ""
+                        }
+
+                return
+
+            return
+
+        # ----------------------------------------------------
+        # Ignorierter Bereich
+        # ----------------------------------------------------
+
         if self.skip_depth:
 
             self.skip_depth += 1
@@ -222,8 +635,6 @@ class WikipediaParser(HTMLParser):
 
         class_list = classes.split()
 
-        # Diese Wikipedia-Webelemente gehören nicht in
-        # unseren reinen Artikeltext.
         unwanted_classes = {
             "mw-editsection",
             "mw-editsection-bracket",
@@ -245,8 +656,16 @@ class WikipediaParser(HTMLParser):
             "portalbox",
             "noprint",
             "printonly",
-            "thumbcaption"
+            "thumbcaption",
+            "shortdescription",
+            "nomobile",
+            "noexcerpt",
+            "mw-cite-backlink"
         }
+
+        # ----------------------------------------------------
+        # Bearbeiten / Navigation / Infoboxen usw. entfernen
+        # ----------------------------------------------------
 
         if (
             tag in self.skip_tags
@@ -261,7 +680,7 @@ class WikipediaParser(HTMLParser):
             return
 
         # ----------------------------------------------------
-        # Überschriften
+        # Überschrift
         # ----------------------------------------------------
 
         if tag in {
@@ -283,7 +702,7 @@ class WikipediaParser(HTMLParser):
             )
 
         # ----------------------------------------------------
-        # Listen
+        # Liste
         # ----------------------------------------------------
 
         elif tag == "li":
@@ -293,7 +712,7 @@ class WikipediaParser(HTMLParser):
             self.current = "- "
 
         # ----------------------------------------------------
-        # Absatz / Blockelement
+        # Blockelement
         # ----------------------------------------------------
 
         elif tag in self.block_tags:
@@ -326,8 +745,6 @@ class WikipediaParser(HTMLParser):
                     " "
                 )
 
-                # Sonderseiten wie Kategorien, Dateien,
-                # Hilfe usw. nicht als normale Links behandeln.
                 if ":" not in title:
 
                     self.current_link = {
@@ -335,20 +752,122 @@ class WikipediaParser(HTMLParser):
                         "text": ""
                     }
 
-    # --------------------------------------------------------
+    # ========================================================
     # ENDTAG
-    # --------------------------------------------------------
+    # ========================================================
 
     def handle_endtag(self, tag):
 
+        # ----------------------------------------------------
+        # Verschachtelte Tabelle
+        # ----------------------------------------------------
+
+        if self.table_depth > 1:
+
+            if tag == "table":
+
+                self.table_depth -= 1
+
+            return
+
+        # ----------------------------------------------------
+        # Tabelle
+        # ----------------------------------------------------
+
+        if self.table_depth == 1:
+
+            if tag in {"td", "th"}:
+
+                self.finish_table_cell()
+                return
+
+            if tag == "tr":
+
+                self.finish_table_row()
+                return
+
+            if tag == "caption":
+
+                if self.table_current_cell is not None:
+
+                    caption = clean_text(
+                        self.table_current_cell
+                    ).strip()
+
+                    if caption:
+
+                        self.table_caption = caption
+
+                self.table_current_cell = None
+
+                return
+
+            if tag == "table":
+
+                self.finish_table_row()
+
+                rendered = render_table(
+                    self.table_rows,
+                    self.table_caption,
+                    TEXT_WIDTH
+                )
+
+                self.lines.extend(
+                    rendered
+                )
+
+                self.table_depth = 0
+                self.table_rows = []
+                self.table_current_row = None
+                self.table_current_cell = None
+                self.table_caption = None
+
+                return
+
+            # Link innerhalb einer Tabelle
+            if (
+                tag == "a"
+                and self.current_link is not None
+            ):
+
+                visible_text = clean_text(
+                    self.current_link["text"]
+                ).strip()
+
+                title = self.current_link[
+                    "title"
+                ]
+
+                if visible_text:
+
+                    if self.table_current_cell is not None:
+
+                        self.table_current_cell += (
+                            visible_text
+                        )
+
+                    self.register_link(
+                        visible_text,
+                        title
+                    )
+
+                self.current_link = None
+
+                return
+
+            return
+
+        # ----------------------------------------------------
         # Ignorierter Bereich
+        # ----------------------------------------------------
+
         if self.skip_depth:
 
             self.skip_depth -= 1
             return
 
         # ----------------------------------------------------
-        # Wikipedia-Link abschließen
+        # Normaler Wikipedia-Link
         # ----------------------------------------------------
 
         if (
@@ -360,48 +879,36 @@ class WikipediaParser(HTMLParser):
                 self.current_link["text"]
             ).strip()
 
-            title = self.current_link["title"]
+            title = self.current_link[
+                "title"
+            ]
 
             if visible_text:
 
-                # Nur der sichtbare Text kommt in den Artikel.
-                # Keine [[ ]] mehr.
-                self.current += visible_text
+                # Nur der sichtbare Text
+                # kommt in die TXT.
+                self.current += (
+                    visible_text
+                )
 
-                # Link für die Linkliste speichern
-                if not any(
-                    link["text"] == visible_text
-                    and link["title"] == title
-                    for link in self.links
-                ):
-
-                    self.links.append({
-                        "text": visible_text,
-                        "title": title,
-                        "url": (
-                            "https://de.wikipedia.org/wiki/"
-                            + urllib.parse.quote(
-                                title.replace(
-                                    " ",
-                                    "_"
-                                )
-                            )
-                        )
-                    })
+                self.register_link(
+                    visible_text,
+                    title
+                )
 
             self.current_link = None
 
         # ----------------------------------------------------
-        # Blockelement abschließen
+        # Blockelement
         # ----------------------------------------------------
 
         if tag in self.block_tags:
 
             self.finish_line()
 
-    # --------------------------------------------------------
+    # ========================================================
     # TEXT
-    # --------------------------------------------------------
+    # ========================================================
 
     def handle_data(self, data):
 
@@ -410,6 +917,20 @@ class WikipediaParser(HTMLParser):
 
         data = html.unescape(data)
 
+        # Tabelle
+        if self.table_depth == 1:
+
+            if self.current_link is not None:
+
+                self.current_link["text"] += data
+
+            elif self.table_current_cell is not None:
+
+                self.table_current_cell += data
+
+            return
+
+        # Normaler Text
         if self.current_link is not None:
 
             self.current_link["text"] += data
@@ -418,9 +939,95 @@ class WikipediaParser(HTMLParser):
 
             self.current += data
 
-    # --------------------------------------------------------
-    # ZEILE ABSCHLIESSEN
-    # --------------------------------------------------------
+    # ========================================================
+    # LINK REGISTRIEREN
+    # ========================================================
+
+    def register_link(
+        self,
+        visible_text,
+        title
+    ):
+
+        if not visible_text:
+            return
+
+        if not title:
+            return
+
+        if any(
+            link["text"] == visible_text
+            and link["title"] == title
+            for link in self.links
+        ):
+            return
+
+        self.links.append({
+            "text": visible_text,
+            "title": title,
+            "url": (
+                "https://de.wikipedia.org/wiki/"
+                + urllib.parse.quote(
+                    title.replace(
+                        " ",
+                        "_"
+                    )
+                )
+            )
+        })
+
+    # ========================================================
+    # TABELLENZELLE ABSCHLIESSEN
+    # ========================================================
+
+    def finish_table_cell(self):
+
+        if self.table_current_cell is None:
+            return
+
+        value = clean_text(
+            self.table_current_cell
+        ).strip()
+
+        if self.table_current_row is None:
+
+            self.table_current_row = []
+
+        self.table_current_row.append(
+            value
+        )
+
+        self.table_current_cell = None
+
+    # ========================================================
+    # TABELLENZEILE ABSCHLIESSEN
+    # ========================================================
+
+    def finish_table_row(self):
+
+        self.finish_table_cell()
+
+        if (
+            self.table_current_row
+            and self.table_depth == 1
+        ):
+
+            # Eine Tabellenzeile gilt als Kopfzeile,
+            # wenn mindestens eine Zelle ein <th> war.
+            #
+            # Für eine einfache Darstellung reicht hier
+            # die Erkennung über die gespeicherte Information.
+            #
+            self.table_rows.append({
+                "cells": self.table_current_row,
+                "header": False
+            })
+
+        self.table_current_row = None
+
+    # ========================================================
+    # NORMALE ZEILE ABSCHLIESSEN
+    # ========================================================
 
     def finish_line(self):
 
@@ -436,11 +1043,28 @@ class WikipediaParser(HTMLParser):
 
         self.current = ""
 
-    # --------------------------------------------------------
+    # ========================================================
     # TEXT AUSGEBEN
-    # --------------------------------------------------------
+    # ========================================================
 
     def get_text(self):
+
+        # Falls noch eine Tabelle offen ist
+        if self.table_depth == 1:
+
+            self.finish_table_row()
+
+            rendered = render_table(
+                self.table_rows,
+                self.table_caption,
+                TEXT_WIDTH
+            )
+
+            self.lines.extend(
+                rendered
+            )
+
+            self.table_depth = 0
 
         self.finish_line()
 
@@ -514,7 +1138,7 @@ def create_nanorc(filepath, links):
         'syntax "Wikipedia"'
     )
 
-    # Hauptüberschriften
+    # Überschriften
     lines.append(
         'color brightblue "^={3,}.*$"'
     )
@@ -524,7 +1148,16 @@ def create_nanorc(filepath, links):
         'color brightblue "^(ARTIKEL|ABGERUFEN|QUELLE):.*$"'
     )
 
-    # Linktexte grün hervorheben
+    # Tabellenrahmen
+    lines.append(
+        'color cyan "^\\+[-+]+\\+$"'
+    )
+
+    lines.append(
+        'color cyan "^\\|.*\\|$"'
+    )
+
+    # Linktexte grün
     seen = set()
 
     for link in links:
@@ -537,7 +1170,9 @@ def create_nanorc(filepath, links):
         if link_text in seen:
             continue
 
-        seen.add(link_text)
+        seen.add(
+            link_text
+        )
 
         pattern = re.escape(
             link_text
@@ -595,7 +1230,7 @@ def shlex_quote(text):
 def download_article(title):
 
     print()
-    print("Wikipedia")
+    print("Wikiterm")
     print("=" * 60)
     print()
     print(f"Suche: {title}")
@@ -699,7 +1334,7 @@ def download_article(title):
     )
 
     # --------------------------------------------------------
-    # HTML verarbeiten
+    # HTML parsen
     # --------------------------------------------------------
 
     parser = WikipediaParser()
@@ -710,10 +1345,10 @@ def download_article(title):
 
     text = parser.get_text()
 
-    # Fließtext auf 78 Zeichen umbrechen
+    # Fließtext umbrechen
     text = wrap_text(
         text,
-        78
+        TEXT_WIDTH
     )
 
     links = parser.links
@@ -841,7 +1476,7 @@ Die jeweiligen Lizenzbedingungen sind zu beachten.
 """
 
     # --------------------------------------------------------
-    # Datei speichern
+    # Datei schreiben
     # --------------------------------------------------------
 
     try:
@@ -887,15 +1522,19 @@ Die jeweiligen Lizenzbedingungen sind zu beachten.
         "Artikel erfolgreich heruntergeladen."
     )
     print()
+
     print(
         f"Titel: {real_title}"
     )
+
     print(
         f"Datei: {filepath}"
     )
+
     print(
         f"Links: {len(links)}"
     )
+
     print()
 
     # --------------------------------------------------------
@@ -937,11 +1576,33 @@ def main():
 
         print()
         print(
+            "Wikiterm"
+        )
+        print("=" * 60)
+        print()
+        print(
             "Verwendung:"
         )
         print()
         print(
             "  wikipedia download ARTIKEL"
+        )
+        print()
+        print(
+            "Beispiele:"
+        )
+        print()
+        print(
+            "  wikipedia download Bremen"
+        )
+        print(
+            "  wikipedia download Berlin"
+        )
+        print(
+            '  wikipedia download "Windows 3.11"'
+        )
+        print(
+            '  wikipedia download "Albert Einstein"'
         )
         print()
 
